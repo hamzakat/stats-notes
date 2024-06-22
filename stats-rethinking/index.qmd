@@ -1,4 +1,9 @@
 ---
-title: Statistical Rethinking, 2nd Edition (by Richard McElreath)
+title: Statistical Rethinking, 2nd Edition
+editor:
+  render-on-save: true
+
+description: by Richard McElreath
+
 ---
 

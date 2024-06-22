@@ -1,0 +1,247 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+
+execute:
+  echo: true
+  error: true
+---
+
+# Lectures
+
+## Lecture 4: Categories & Curves
+
+Let's make a function that represents the relationships in this scientific (causal) model:
+
+![](images/Untitled-01.png)
+
+```{r}
+# simulation function #
+sim_HW <- function(S,b,a) {
+# S=1 female; S=2 male
+  N <- length(S)
+  # arbirtary parameters based on sex
+  H <- ifelse(S==1, 150, 160) + rnorm(N, 0, 5)
+  
+  # a is the intercept; b is the slope
+  W <- a[S] + b[S] * H + rnorm(N, 0, 5)
+  data.frame(S, H, W)
+}
+
+# test the simulation function #
+
+rbern <- function(n, p = 0.5) {
+  rbinom(n, size = 1, prob = p)
+}
+
+# generate sexes for persons
+S <- rbern(100) + 1
+# pass the parameters a and b for each sex
+dat <- sim_HW(S, b=c(0.5,0.6), a=c(0,0))
+head(dat)
+
+```
+
+Finding the causal effect involves conditioning on the confounder or mediator to block the association. This implies computing the difference between posterior prediction which is formally called *computing the contrast.*
+
+### Finding the total causal effect
+
+![](images/Untitled.png)
+
+What's the total causal effect of sex (through the two passes)? It is the difference made intervening. Let's find that by testing
+
+```{r}
+# female sample
+S <- rep(1,100)
+simF <- sim_HW(S,b=c(0.5,0.6),a=c(0,0))
+
+# female sample
+S <- rep(2,100)
+simM <- sim_HW(S,b=c(0.5,0.6),a=c(0,0))
+
+# effect of sex (male-female)
+mean(simM$W - simF$W)
+```
+
+Now, we want to define the statistical model (i.e. generative model) of weight:
+
+$$
+W_i \sim Normal(\mu_i, \sigma)
+$$
+
+$$ \mu_i = \alpha_{S[i]} $$
+
+$$ \alpha_j \sim Normal(60,10) $$
+
+$$ \sigma \sim Uniform(0,10) $$
+
+Let's run the estimating model and synthetic sample
+
+```{r}
+# observe sample (100 individuals)
+S <- rbern(100)+1
+dat <- sim_HW(S, b=c(.5,.6), a=c(0,0))
+
+library(rethinking)
+
+# estimate posterior
+m_SW <- quap(
+  alist(
+    W ~ dnorm(mu, sigma),
+    mu <- a[S],
+    a[S] ~ dnorm(60,10),
+    sigma ~ dunif(0,10)
+  ),
+  data=dat
+)
+
+precis(m_SW, depth = 2)
+```
+
+Note that `a` is the average weight in the observed sample, stratified by sex.
+
+#### Fit the model to the real data
+
+```{r}
+library(rethinking)
+data("Howell1")
+d <- Howell1
+d <- d[d$age >= 18, ]
+
+dat <- list(
+  W = d$weight,
+  S = d$male + 1
+)
+
+m_SW <- quap(
+  alist(
+    W ~ dnorm(mu, sigma),
+    mu <- a[S],
+    a[S] ~ dnorm(60,10),
+    sigma ~ dunif(0,10)
+  ),
+  data=dat
+)
+
+```
+
+Find the mean weight for each sex (mean weight, NOT predicted weight!)
+
+```{r}
+# sample from posterior (i.e. sample parameter values)
+post <- extract.samples(m_SW)
+
+# plot the posterior mean weight for each sex
+{
+  # female in red
+  dens(post$a[, 1], xlim=c(39,50), lwd=3, col=2, xlab="posterior mean weight (kg)")
+  dens(post$a[, 2], add=TRUE, col=4)
+}
+
+
+```
+
+```{r}
+
+W1 <- rnorm(1e3, post$a[,1], post$sigma)
+W2 <- rnorm(1e3, post$a[,2], post$sigma)
+
+
+# plot the posterior predicted weight for each sex
+{
+  # female in red
+  dens(W1, xlim=c(20,70), lwd=3, col=2, xlab="posterior mean weight (kg)")
+  dens(W2, add=TRUE, col=4)
+}
+
+```
+
+#### Compute contrast
+
+To find the difference between posteriors of each category, we need to compute the ***contrast***.
+
+Note: overlap of distributions doesn't indicate that they are the same or different!
+
+##### 1. Causal contrast in means
+
+```{r}
+mu_contrast <- post$a[,2] - post$a[,1]
+
+dens(mu_contrast, xlim=c(3,10), lwd=3, col=1, xlab="posterior mean weight contrast (kg)")
+```
+
+##### 2. Weight contrast
+
+We want to find the contrast in the distributions of individual people not averages
+
+```{r}
+# simulate
+W1 <- rnorm(1e3, post$a[,1], post$sigma)
+W2 <- rnorm(1e3, post$a[,2], post$sigma)
+
+# contrast
+W_contrast <- W2 - W1
+dens(W_contrast, xlim=c(-25,35), lwd=3, col=1, xlab="posterior weight contrast (kg")
+
+
+```
+
+Since we subtracted the posterior of women weights from the posterior of men weights, we can get the proportion at which the men have weight more than women by doing the following:
+
+```{r}
+sum(W_contrast > 0) / 1e3
+```
+
+So 79% of the time, men are heavier than women in this population
+
+```{r}
+sum(W_contrast < 0) / 1e3
+```
+
+So 20% of the time, women are heavier than women in this population
+
+### Direct causal effect of S on W
+
+![](images/Untitled-02.png)
+
+We need to block association through H = This means stratify by H.
+
+The model is defined by:
+
+$$
+W_i \sim Normal(\mu_i, \sigma)
+$$
+
+$$
+\mu_i = \alpha_{S[i]} + \beta_{S[i]}(H_i - \bar{H})
+$$
+
+Note: it is a common practice to subtract predictor (i.e. H) from its average in order to make the intercept reflecting the outcome value when the predictor equals the average value. This is called "centering".
+
+The parameter now is a linear model. Let's define the whole model with code:
+
+```{r}
+data("Howell1")
+d <- Howell1
+d <- d[d$age >= 18, ]
+
+dat <- list(
+  W = d$weight,
+  H = d$height,
+  Hbar = mean(d$height),
+  S = d$male+1
+)
+
+m_SHW <- quap(
+  alist(
+    W ~ dnorm(mu, sigma),
+    mu <- a[S] + b[S] * (H - Hbar),
+    a[S] ~ dnorm(60,10),
+    b[S] ~ dunif(0,1),
+    sigma ~ dunif(0,10)
+  ),
+  data=dat
+)
+
+```

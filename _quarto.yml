@@ -4,12 +4,19 @@ project:
 
 website:
   title: "stats-notes"
-  description: "Study notes on statistics (books - courses - etc.)"
+  description: "Study notes on statistics"
   sidebar:
     contents: auto
+    tools:
+      - icon: github
+        href: https://github.com/hamzakat/stats-notes/
+    collapse-level: 1
 
 format:
   html:
     theme: cosmo
     css: styles.css
     toc: true
+
+editor:
+  render-on-save: true

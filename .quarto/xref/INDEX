@@ -16,5 +16,29 @@
   },
   "stats-rethinking/index.qmd": {
     "index.html": "64625aee"
+  },
+  "stats-rethinking/01-chapter01.qmd": {
+    "01-chapter01.html": "7356abe0"
+  },
+  "stats-rethinking/02-chapter02.qmd": {
+    "02-chapter02.html": "f21de0c4"
+  },
+  "stats-rethinking/03-chapter03.qmd": {
+    "03-chapter03.html": "23cccc4a"
+  },
+  "stats-rethinking/04-chapter04.qmd": {
+    "04-chapter04.html": "4de6c456"
+  },
+  "stats-rethinking/05-chapter05.qmd": {
+    "05-chapter05.html": "d735f11f"
+  },
+  "stats-rethinking/06-chapter06.qmd": {
+    "06-chapter06.html": "aef44ea2"
+  },
+  "stats-rethinking/07-chapter07.qmd": {
+    "07-chapter07.html": "12b0cd48"
+  },
+  "stats-rethinking/99-lectures.qmd": {
+    "99-lectures.html": "16c102da"
   }
 }

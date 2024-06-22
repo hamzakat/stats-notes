@@ -1,0 +1,471 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+
+execute:
+  echo: true
+  error: true
+---
+
+# 6. The Haunted DAG & The Causal Terror
+
+This chapter is about the 3 different hazards that may raise when adding variables to a model: 1. Multicollinearity 2. Post-treatment bias 3. Collider bias
+
+Knowing about these, the chapter will introduce a careful framework that can tell us which variables we must and must not add to a model in order to arrive at valid inferences.
+
+## Example: Simulated science distortion
+
+```{r}
+set.seed(1914)
+N <- 200
+p <- 0.1
+
+nw <- rnorm(N)
+tw <- rnorm(N)
+
+s <- nw + tw
+
+# find the 90th percentile of data
+q <- quantile(s, 1-p)
+
+# keep the points that are higher than the 90th percentile
+selected <- ifelse(s >= q, TRUE, FALSE)
+
+cor(tw[selected], nw[selected])
+# notice the negative correlation as in figure 6.1
+
+```
+
+## Multicollinearity
+
+When two predictors are very strongly correlated, i.e. have the same information (conditional on other variables in the model), including both in a model may lead to confusion. The posterior will be able to make good predictions, but won't be able to make any claims about which leg is more important (i.e. the posterior dist of coefficients would be weird).
+
+This is because the multiple linear regression answers the question:
+
+> *What is the value of knowing each predictor, after already knowing all of the other predictors?*
+
+### Example: predicting height using both legs lengths
+
+```{r}
+N <- 100
+set.seed(909)
+height <- rnorm(N,10,2)
+leg_prop <- runif(N,0.4,0.5)  # leg as prop of height
+
+leg_left <- leg_prop * height + rnorm(N,0,0.02)  # sim left leg as proportion + error
+leg_right <- leg_prop * height + rnorm(N,0,0.02)  # sim right leg as proportion + error
+
+d <- data.frame(height, leg_left, leg_right)
+```
+
+```{r}
+library(rethinking)
+m6.1 <- quap(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + bl*leg_left + br*leg_right,
+    bl ~ dnorm(2,10),
+    br ~ dnorm(2,10),
+    a ~ dnorm(10,100),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+
+plot(precis(m6.1))
+```
+
+Notice how the interval is very wide for both coefficients `bl` and `br` and also contains zero.
+
+Let's check the joint posterior dist. of both leg lengths
+
+```{r}
+post <- extract.samples(m6.1)
+plot(bl~br, post, col=col.alpha(rangi2,0.1), pch=16)
+```
+
+Since both leg variables contain almost exactly the same information, then they cannot be pulled apart because they never separately influence the posterior mean. The posterior dist. in this example produced a good estimate of the sum of `bl` and `br`:
+
+$$
+\mu_i = \alpha+(\beta_1 + \beta_2)x_i
+$$
+
+```{r}
+sum_blbr <- post$bl + post$br
+dens(sum_blbr, col=rangi2, lwd=2, xlab="sum of bl and br")
+```
+
+Mean of the sum approx. equals 2
+
+```{r}
+library(rethinking)
+m6.2 <- quap(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a + bl*leg_left,
+    bl ~ dnorm(2,10),
+    a ~ dnorm(10,100),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+
+plot(precis(m6.2))
+```
+
+### Example: Milk
+
+This example discusses the causal aspect of multicollinearity.
+
+```{r}
+data("milk")
+d <- milk
+d$K <- standardize(d$kcal.per.g)
+d$F <- standardizeDSD(d$perc.fat)  # standardized percent of fat
+d$L <- standardize(d$perc.lactose) # standardized percent of lactose
+```
+
+We want to model the total energy content using the predictors F and K.
+
+Let's start simple and build two models for each predictor:
+
+```{r}
+m6.3 <- quap(
+  alist(
+    K ~ dnorm(mu, sigma),
+    mu <- a + bF*F,
+    bF ~ dnorm(0,0.5),
+    a ~ dnorm(0,0.2),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+
+m6.4 <- quap(
+  alist(
+    K ~ dnorm(mu, sigma),
+    mu <- a + bL*L,
+    bL ~ dnorm(0,0.5),
+    a ~ dnorm(0,0.2),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+```
+
+```{r}
+precis(m6.3)
+```
+
+```{r}
+plot(precis(m6.3))
+
+```
+
+```{r}
+precis(m6.4)
+```
+
+```{r}
+plot(precis(m6.4))
+```
+
+It seems that both models are mirror images of one another, where the posterior mean of bF is positive and for bL is negative and each has a strong association with the outcome.
+
+Let's see what happen when we use both predictors in a model:
+
+```{r}
+
+m6.5 <- quap(
+  alist(
+    K ~ dnorm(mu, sigma),
+    mu <- a + bL*L + bF*F,
+    bL ~ dnorm(0,0.5),
+    bF ~ dnorm(0,0.5),
+    a ~ dnorm(0,0.2),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+```
+
+```{r}
+precis(m6.5)
+```
+
+Notice that the std. dev. now is approx. doubled and the means are close to zero (i.e. the association isn't strong between predictors and outcome). Let's explore the variables further:
+
+```{r}
+pairs(
+  ~kcal.per.g + perc.fat + perc.lactose, data=d, col=rangi2
+)
+```
+
+It is clear that L and F are strongly associated and that's why the multicollinearity happened since either predictors helps in predicting `kcal.per.g` but neither helps as much once you already know the other.
+
+Away from statistics, there is a confounder that influences L and F making them correlated (see p.169).
+
+### Tips to avoid collinearity
+
+-   ~~Do EDA (e.g. scatterplot matrices) before modelling to see the existing correlations between variables and hence deciding which variables to use as predictors, since it is bad to use redundant variables that are highly correlate as predictors.~~
+
+-   Doing EDA (e.g. scatterplot matrices) and finding the pairwise correlation before modelling to see the existing highly correlated predictors and drop them isn't enough. It is the conditional associations that matter, not correlation. Also, the associations within the data alone are not enough to decide what to do.
+
+    -   In other words, there is a confounder that makes predictors/variables associated and this is out of the data and relevant to the scientific model.
+
+-   **Non-identifiability**: It is a family of problems that occur in fitted models. It refers to the fact that the structure of data and model don't make it possible to estimate the parameter's value
+
+    -   Multicollinearity is a member of **Non-identifiability**
+
+    -   When this happens with Bayesian models, the resulted posterior dist will be very similar to prior, so comparing both would be a good idea to see how much information the model extracted from the data.
+
+    -   When posterior and prior are similar, it doesn't mean that the calculation is wrong, but that's an indicator to ask a better questions since the model answers the questions you are asking.
+
+## Post-treatment Bias
+
+Including the post-treatment variables can actually mask the treatment itself.
+
+When your goal is to make a causal inference about the treatment, you shouldn't include the post-treatment variable because it represents the post-treatment effect.
+
+Example: say in an RCT we want to test the effect of treatment (anti fungus) on plant growth knowing that it targets the fungus. The variables would be:
+
+-   Initial height (measured before the treatment)
+
+-   Treatment (influences the presence of fungus)
+
+-   Fungus existence (post-treatment effect and measured after applying the treatment)
+
+-   Final height (measured after applying the treatment)
+
+Simulate data:
+
+```{r}
+set.seed(71)
+
+N <- 100
+
+# initial height
+h0 <- rnorm(N,10,2)
+
+# treatment assignment
+treatment <- rep(0:1, eac=N/2)
+
+# fungus
+fungus <- rbinom(N, size=1, prob=0.5 - treatment*0.4)
+
+# final hieght after growth (remember that the fungus impacts the growth)
+h1 <- h0 + rnorm(N, 5 - 3*fungus)
+
+d <- data.frame(h0=h0, h1=h1, treatment=treatment, fungus=fungus)
+
+precis(d, hist=FALSE)
+
+```
+
+When modeling, we want to add a variable representing the proportion of growth which is 0 \< p \< 1. So, it is good to have it distributed according to log-normal dist.
+
+```{r}
+
+m6.6 <- quap(
+  alist(
+    h1 ~ dnorm(mu, sigma),
+    mu <- p*h0,
+    p ~ dlnorm(0, 0.25),
+    sigma~dexp(1)
+  ), data=d
+)
+
+precis(m6.6)
+```
+
+So the average growth is 40%.
+
+Now, let's include the treatment and fungus variables to model. By doing so, the proportion of growth will be a function of treatment and fungus presence.
+
+```{r}
+m6.7 <- quap(
+  alist(
+    h1 ~ dnorm(mu,sigma),
+    mu <- h0*p,
+    p <- a + bt*treatment * bf*fungus,
+    a ~ dlnorm(0,0.25),
+    bt ~ dnorm(0,0.5),
+    bf ~ dnorm(0,0.5),
+    sigma ~ dexp(1)
+  
+  ),data=d
+)
+
+precis(m6.7)
+```
+
+```{r}
+plot(precis(m6.7))
+```
+
+The treatment seems not to be associated a lot with growth unlike what we expect.
+
+Let's try removing the fungus variable
+
+```{r}
+m6.8 <- quap(
+  alist(
+    h1 ~ dnorm(mu,sigma),
+    mu <- h0*p,
+    p <- a + bt*treatment,
+    a ~ dlnorm(0,0.25),
+    bt ~ dnorm(0,0.5),
+    sigma ~ dexp(1)
+  
+  ),data=d
+)
+
+plot(precis(m6.8))
+```
+
+Now, the interval is more tight and doesn't include zero which means the association between treatment and growth now is stronger comparing with the result of the previous model. This is because including post-treatment variables can mask the treatment itself.
+
+## Exercises
+
+### M2
+
+```{r}
+sim_x <- rnorm(1e3, 0, 1)
+sim_z <- sim_x + rnorm(1e3, 0, 0.01)
+sim_y <- sim_z + rnorm(1e3, 0, 4)
+
+cor(sim_x, sim_z)
+```
+
+```{r}
+d <- data.frame(x=sim_x, y=sim_y, z=sim_z)
+m2 <- quap(
+  alist(
+    y ~ dnorm(mu, sigma),
+    mu <- a + bz*z,
+    bz ~ dnorm(0,1),
+    a ~ dnorm(0,1),
+    sigma ~ dexp(1),
+    
+    z~dnorm(mu_z, sigma_z),
+    mu_z <- a_z + bx*x,
+    bx ~ dnorm(0,1),
+    a_z ~ dnorm(0,1),
+    sigma_z ~ dexp(1)
+  ),
+  data = d
+)
+
+plot(precis(m2))
+```
+
+The multicollinearity is here as y and x provide redundant information. In the leg example, the DAG is L \<- H -\> R and here the DAG is X -\> Z -\> Y. However, the conditional independence is different although the predictors are highly correlated.
+
+### H1
+
+```{r}
+data("WaffleDivorce")
+d <- WaffleDivorce
+
+# load data and standardaize
+d$S = as.integer(d$South)
+d$M = standardize(d$Marriage)
+d$A = standardize(d$MedianAgeMarriage)
+d$W = standardize(d$WaffleHouses)
+d$D = standardize(d$Divorce)
+
+```
+
+Let's create the DAG as in p. 187
+
+```{r}
+library(dagitty)
+dag <- dagitty("dag{
+    S -> W -> D;
+    S -> M -> D;
+    S -> A -> D;
+    S -> A -> M -> D
+}")
+
+
+```
+
+Let's check the adjustment sets:
+
+```{r}
+adjustmentSets(dag, exposure = "W", outcome = "D")
+```
+
+These act as confounders. Let's adjust for S by Including it as a covariate in the regression model.
+
+```{r}
+
+mh1 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a + bW*W + bS*S,
+    a ~ dnorm(0, 0.2),
+    bW ~ dnorm(0, 0.5),
+    bS ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+
+  ),data = d
+)
+```
+
+```{r}
+plot(precis(mh1))
+```
+
+We can see that the causal effect of W on D is very small which isnot surprising.
+
+### H2
+
+```{r}
+impliedConditionalIndependencies(dag)
+```
+
+### H3
+
+```{r}
+data("foxes")
+d <- foxes
+str(d)
+```
+
+```{r}
+
+d$av <- standardize(d$avgfood)
+d$g <- standardize(d$groupsize)
+d$a <- standardize(d$area)
+d$w <- standardize(d$weight)
+
+d$W
+mh3 <- quap(
+  alist(
+    # g -> w <- av
+    w ~ dnorm(mu,sigma),
+    mu <- a + bAV*av + bG*g,
+    bAV ~ dnorm(0,1),
+    bG ~ dnorm(0,1),
+    a ~ dnorm(0, 1),
+    sigma ~ dexp(1),
+    
+    # a -> av
+    av ~ dnorm(muAV, sigmaAV),
+    muAV <- aAV + bA*a,
+    bA ~ dnorm(0,1),
+    aAV ~ dnorm(0, 1),
+    sigmaAV ~ dexp(1),
+    
+    # av -> g
+    g ~ dnorm(muG, sigmaG),
+    muG <- aG + bAG*g,
+    bAG ~ dnorm(0,1),
+    aG ~ dnorm(0, 1),
+    sigmaG ~ dexp(1)
+    
+  ), data=d
+)
+```

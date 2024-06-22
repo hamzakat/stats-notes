@@ -1,0 +1,816 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+
+execute:
+  echo: true
+  error: true
+---
+
+# 5. The Many Variablles and The Spurious Waffles
+
+The dataset `WaffleDivorce` contains data om divorce rate, marraige rate, and median marriage age. 
+
+Let's load the data first
+
+```{r}
+library(rethinking)
+data("WaffleDivorce")
+d <- WaffleDivorce
+
+```
+
+Let's explore the associations:
+
+
+1. Divorce rate with median age at marriage
+```{r}
+plot(Divorce~MedianAgeMarriage, data=d, xlim=c(20,30), ylim=c(5,20))
+```
+
+
+2. Divorce rate with marriage rate
+
+```{r}
+plot(Divorce~Marriage, data=d, xlim=c(10,30), ylim=c(5,20))
+```
+
+
+It looks like the associations are reversed.
+
+## Model 1: D ~ A
+Here's the model linear regression model for the 1st association:
+$$
+D_i \sim N(\mu_i, \sigma)
+$$
+$$
+\mu_i = \sigma + \beta_A A_i
+$$
+
+$$
+\alpha \sim N(0, 0.2)
+$$
+
+$$
+\beta \sim N(0, 0.5)
+$$
+
+$$
+\sigma \sim Exp(0, 0.5)
+$$
+
+Before coding the model, let's standardize variables.
+```{r}
+# standardize variables
+d$D <- standardize(d$Divorce)
+d$M <- standardize(d$Marriage)
+d$A <- standardize(d$MedianAgeMarriage)
+```
+
+By standardizing the variables, we can say that if $\beta_A=1$, then a change of 1 std. deviation in $A_i$ is associated with a full std. deviation change in the outcome variable.
+
+```{r}
+m5.1 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a+bA*A,
+    a ~ dnorm(0, 0.2),
+    bA <- dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+
+
+```
+
+```{r}
+
+set.seed(10)
+prior <- extract.prior(m5.1)
+mu <- link(m5.1, post=prior, data=list(A=c(-2,2)))
+plot(NULL, xlim=c(-2,2), ylim=c(-2,2))
+for(i in 1:50) lines(c(-2,2), mu[i,], col=col.alpha("black", 0.4))
+
+
+```
+
+
+```{r}
+A_seq <- seq(-3,3.2,30)
+mu <- link(m5.1, data=list(A=A_seq))
+mu.mean <- apply(mu, 2, mean)
+mu.PI <- apply(mu, 2, PI, prob=0.89)
+
+{
+  plot(D~A, data=d, col=rangi2)
+  lines(A_seq, mu.mean, lwd=2)
+  shade(mu.PI, A_seq)
+}
+
+
+```
+
+
+
+## Model 2: D ~ M
+
+$$
+D_i \sim N(\mu_i, \sigma)
+$$
+$$
+\mu_i = \sigma + \beta_M M_i
+$$
+
+$$
+\alpha \sim N(0, 0.2)
+$$
+
+$$
+\beta_M \sim N(0, 0.5)
+$$
+
+$$
+\sigma \sim Exp(0, 0.5)
+$$
+
+
+```{r}
+m5.2 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a+bM*A,
+    a ~ dnorm(0, 0.2),
+    bM <- dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+```
+
+
+## DAGs
+Let's assume the possible causal models that are connected to the divorce rate association examples
+
+### Proposed DAG Model 1
+```{r}
+library(dagitty)
+DMA1 <- dagitty('dag{D <- A -> M -> D}')
+drawdag(DMA1)
+```
+
+
+```{r}
+impliedConditionalIndependencies(DMA1)
+# no output because there is no conditional independence
+```
+
+### Proposed DAG Model 2
+
+```{r}
+DMA2 <- dagitty('dag{D <- A -> M}')
+drawdag(DMA2)
+```
+
+
+```{r}
+impliedConditionalIndependencies(DMA2)
+```
+
+
+## Model 3: Multiple Regression
+
+$$
+D_i \sim N(\mu_i, \sigma)
+$$
+$$
+\mu_i = \sigma + \beta_M M_i + \beta_A A_i
+$$
+
+$$
+\alpha \sim N(0, 0.2)
+$$
+
+$$
+\beta_M \sim N(0, 0.5)
+$$
+$$
+\beta_A \sim N(0, 0.5)
+$$
+
+$$
+\sigma \sim Exp(0, 0.5)
+$$
+
+
+```{r}
+m5.3 <- quap(
+  alist(
+    D ~ dnorm(mu, sigma),
+    mu <- a + bM*M + bA*A ,
+    a ~ dnorm(0, 0.2),
+    bA <- dnorm(0, 0.5),
+    bM <- dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+precis(m5.3)
+
+```
+
+```{r}
+plot(coeftab(m5.1,m5.2,m5.3), par=c("bA", "bM"))
+```
+We can read this result as:
+> Once we know median age at marriage for a state, there is little or no additional predictive power in also knowing the rate of marriage in that state.
+
+Intuitive explanation:
+The plot shows that the coefficient for the median age at marriage (bA) is quite stable across models (m5.1 and m5.3), while the coefficient for the marriage rate (bM) is less stable and moves towards zero when both predictors are included. 
+This indicates that the median age at marriage is capturing most of the variability that the marriage rate would also explain. 
+Thus, once you know the median age at marriage, the marriage rate doesn't add much new information (predictive power) for the outcome of interest.
+
+Results:
+- DAG 1 implies this result.
+- The association between marriage rate $M$ and $D$ divorce rate is spurious and caused by the influence of age of marriage on both $M$ and $D$.
+- Strictly speaking: $D \amalg M|A$
+
+
+## Simulating spurious association
+Let's simulate the association in the DAG: 
+
+
+```{r}
+N <- 100
+x_real <- rnorm(N)
+x_spur <- rnorm(N, x_real)
+y <- rnorm(N, x_real)
+d <- data.frame(y, x_real, x_spur)
+pairs(d)
+```
+
+## Plotting multivariate posterior
+
+The book covered 3 kinds of plots:
+
+### 1. Predictor residual
+Predictor residual is the average prediction error when we use all of the other predictor variables to model a predictor of interest
+
+```{r}
+
+data("WaffleDivorce")
+d <- WaffleDivorce
+
+d$D <- standardize(d$Divorce)
+d$M <- standardize(d$Marriage)
+d$A <- standardize(d$MedianAgeMarriage)
+
+m5.4 <- quap(
+  alist(
+    M ~ dnorm(mu, sigma),
+    mu <- a + bAM * A, 
+    a ~ dnorm(0, 0.2),
+    bAM ~ dnorm(0, 0.5),
+    sigma ~ dexp(1)
+  ), data=d
+)
+
+mu <- link(m5.4)
+mu_mean <- apply(mu, 2, mean)
+mu_resid <- d$M - mu_mean
+
+
+```
+
+
+### 2. Posterior prediction plots
+```{r}
+mu <- link(m5.3)
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI)
+
+D_sim <- sim(m5.3, n=1e4)
+D_PI <- apply(D_sim, 2, PI)
+
+{
+  plot(mu_mean ~ d$D, col=rangi2, ylim=range(mu_PI),
+       xlab="Observed divorce", ylab="Predicted divorce")
+  
+  abline(a=0, b=1, lty=2)
+  for(i in 1:nrow(d)) lines(rep(d$D[i], 2), mu_PI[,i], col=rangi2)
+
+}
+```
+
+
+
+
+
+
+### 3. Counterfactual plots
+This displays the causal implications of the model. They help you understand the model, as well as generate predictions for imaginary interventions and compute how much some observed outcome could be attributed to some cause.
+
+The basic recipe:
+1. Set the assumed scientific model (e.g. draw the DAG)
+2. Pick the intervention variable (i.e. variable to manipulate)
+3. Define the range of values to set the intervention variable to
+4. Do the following simulation:
+```
+For each value of intervention variable:
+  For each sample in posterior:
+    Use the causal model to simulate the values of other variables including the outcome
+```    
+
+#### DAG Model 1
+For the divorce model (represented by the DAG 1), we need a set of functions that tell us how each variable is generated. We will follow the same approach we did in the m5.3 but with adding the influence of A on M, since in the previous models we cared about estimating A -> D influence. Now, we need to predict the consequences of manipulating A.
+Estimating the influence of A on M is conducting by regressing A on M.
+
+```{r}
+
+d <- list()
+d$A <- standardize(WaffleDivorce$MedianAgeMarriage)
+d$D <- standardize(WaffleDivorce$Divorce)
+d$M <- standardize(WaffleDivorce$Marriage)
+
+m5.3_A <- quap(
+  alist(
+    # A -> D <- M
+    D ~ dnorm(mu, sigma),
+    mu <- a + bM * M + bA * A,
+    bM ~ dnorm(0, 0.5),
+    bA ~ dnorm(0, 0.5),
+    a ~ dnorm(0, 0.2),
+    sigma ~ dexp(1),
+    
+    # A -> M
+    M ~ dnorm(mu_M, sigma_M),
+    mu_M <- aM + bAM * A,
+    bAM ~ dnorm(0, 0.5),
+    aM ~ dnorm(0, 0.2),
+    sigma_M ~ dexp(1)
+    
+  ), data=d
+)
+
+
+```
+
+Let's define the range of values for A
+```{r}
+A_seq <- seq(from=-2,to=2,length.out=30)
+```
+
+Let's do the simulate both M and D in order. The order is important because we have to simulate the influence of A -> M before simulating the joint Influence A -> M -> D
+```{r}
+sim_dat <- data.frame(A=A_seq)
+
+s <- sim(m5.3_A, data=sim_dat, vars=c("M","D"))
+
+```
+
+```{r}
+{
+plot(sim_dat$A, colMeans(s$D), ylim=c(-2,2), type="l",
+     xlab="manipulated A", ylab="counterfactual D")
+shade(apply(s$D,2,PI), sim_dat$A)
+mtext("Total counterfactual effect of A on D")
+}
+```
+This plot shows the predicted trend in D including both paths:
+A -> D
+A -> M -> D
+
+Let's find the expected causal effect of increasing median age at marriage from 20 to 30:
+```{r}
+# standardize 20 and 30 before inference (remember mean(A) = 26.1 and sd(A)=1.24)
+A_test <- c(20,30) - 26.1 / 1.24
+sim2_dat <- data.frame(A=A_test)
+s2 <- sim(m5.3_A, data=sim2_dat, vars=c("M","D"))
+
+# find the expected causal effect on D: before increase - after increase
+mean(s2$D[, 2] - s2$D[,1])
+
+
+```
+
+The result indicates a huge effect (5.7 std. dev).
+
+#### DAG Model 2
+
+Let's simulate a counterfactual for an average state with A=0 and the causal effect of manipulating M on D (note: manipulating M requires removing the arrows entering into M resulting in the DAG model 2):
+
+```{r}
+M_seq <- seq(from=-2,to=2,length.out=30)
+
+sim_dat <- data.frame(M=M_seq, A=0)
+
+s <- sim(m5.3_A, data=sim_dat, vars="D")
+
+
+{
+plot(sim_dat$M, colMeans(s), ylim=c(-2,2), type="l",
+     xlab="manipulated M", ylab="counterfactual D")
+shade(apply(s,2,PI), sim_dat$M)
+mtext("Total counterfactual effect of M on D")
+}
+
+```
+
+It clear how the trend is less strong because there is no evidence for a strong influence of M on D.
+
+
+#### Simulating counterfactual w/o `sim` function
+Let's simulate the counterfactual for manipulating A w/o using the `sim` function.
+```{r}
+A_seq <- seq(from=-2, to=-2, length.out=30)
+post <- extract.samples(m5.3_A)
+
+# effect on M (distribution of M after simulating the counterfactual)
+M_sim <- with(post, sapply(
+  1:30,
+  function(i) rnorm(1e3, aM + bAM*A_seq[i], sigma_M)
+))
+
+dens(M_sim)
+
+
+
+```
+
+```{r}
+# effect on D
+D_sim <- with(post, sapply(
+  1:30,
+  function(i) rnorm(1e3, a + bA*A_seq[i] + bM*M_sim[i], sigma_M)
+))
+
+dens(D_sim)
+```
+
+
+## Masked relationships
+
+```{r}
+data("milk")
+d <- milk
+str(d)
+```
+
+Standardiaze the variables we want to use in the analysis
+```{r}
+d$K <- standardize(d$kcal.per.g)
+d$N <- standardize(d$neocortex.perc)
+d$M <- standardize(d$mass)
+```
+
+### Model 1 (K ~ N): simple bivariate regression between K and N
+
+$$
+K_i \sim Normal(\mu_i, sigma)
+$$
+$$
+\mu_i = \alpha + \beta_N N_i
+$$
+Define the model with vague priors
+```{r}
+m5.5_draft <- quap(
+  alist(
+    K~dnorm(mu, sigma),
+    mu <- a + bN * N,
+    a~dnorm(0,1),
+    bN~dnorm(0,1),
+    sigma~dexp(1)
+    
+  ), data=d
+)
+```
+
+
+We want to conduct the analysis with complete cases only (i.e. cases shouldn't have NA in the variables of interest)
+```{r}
+# keep the rows that corresponds to complete cases for the variables we are interested in
+dcc <- d[complete.cases(d$K, d$N, d$M),]
+
+```
+
+```{r}
+m5.5_draft <- quap(
+  alist(
+    K~dnorm(mu, sigma),
+    mu <- a + bN * N,
+    a~dnorm(0,1),
+    bN~dnorm(0,1),
+    sigma~dexp(1)
+    
+  ), data=dcc
+)
+```
+
+
+Let's simulate 50 priors:
+```{r}
+prior <- extract.prior(m5.5_draft)
+xseq <- c(-2,2)
+mu <- link(m5.5_draft, post=prior, data = list(N=xseq))
+
+{
+  plot(NULL, xlim=xseq, ylim=xseq)
+  for (i in 1:50) lines(xseq, mu[i,], col=col.alpha("black", 0.3))
+}
+
+```
+
+Let's tighten the priors so that they stick closer and produce more reliable relationships:
+```{r}
+m5.5 <- quap(
+  alist(
+    K~dnorm(mu, sigma),
+    mu <- a + bN * N,
+    a~dnorm(0,0.2),
+    bN~dnorm(0,0.5),
+    sigma~dexp(1)
+    
+  ), data=dcc
+)
+
+prior <- extract.prior(m5.5)
+xseq <- c(-2,2)
+mu <- link(m5.5, post=prior, data = list(N=xseq))
+
+{
+  plot(NULL, xlim=xseq, ylim=xseq)
+  for (i in 1:50) lines(xseq, mu[i,], col=col.alpha("black", 0.3))
+}
+```
+
+```{r}
+xseq <- seq(from=min(dcc$N)-0.15, to=max(dcc$N)+0.15, length.out=30)
+mu <- link(m5.5, data=list(N=xseq))
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI)
+plot(K~N, data=dcc)
+lines(xseq, mu_mean, lwd=2)
+shade(mu_PI, xseq)
+```
+
+```{r}
+precis(m5.5)
+
+```
+N is slightly positivley associated with K.
+
+### Model 2 (K ~ M)
+Remember that `mass` in the original dataset is the logarethem of mass (log-mass)
+```{r}
+m5.6 <- quap(
+  alist(
+    K~dnorm(mu, sigma),
+    mu <- a + bM * M,
+    a~dnorm(0,0.2),
+    bM~dnorm(0,0.5),
+    sigma~dexp(1)
+  ),
+  data=dcc
+)
+precis(m5.6)
+```
+Log-mass M is negatively associated with K.
+
+```{r}
+xseq <- seq(from=min(dcc$M)-0.15, to=max(dcc$M)+0.15, length.out=30)
+mu <- link(m5.6, data=list(M=xseq))
+mu_mean <- apply(mu, 2, mean)
+mu_PI <- apply(mu, 2, PI)
+plot(K~M, data=dcc)
+lines(xseq, mu_mean, lwd=2)
+shade(mu_PI, xseq)
+```
+
+Model 1 and 2 aren't useful in our case and they show no significant association
+
+### Model 3: Multivariate
+
+
+$$
+K_i \sim Normal(\mu_i, sigma)
+$$
+
+$$
+\mu_i = \alpha + \beta_N N_i + \beta_M M_i
+$$
+
+```{r}
+m5.7 <- quap(
+  alist(
+    K~dnorm(mu, sigma),
+    mu <- a + bN*N + bM * M,
+    a~dnorm(0,0.2),
+    bN~dnorm(0,0.5),
+    bM~dnorm(0,0.5),
+    sigma~dexp(1)
+  ),
+  data=dcc
+)
+precis(m5.7)
+```
+
+```{r}
+plot(precis(m5.7))
+```
+
+
+Let's compare with the previous models:
+```{r}
+plot(coeftab(m5.5, m5.6, m5.7), pars=c("bM","bN"))
+```
+By incorporating both predictor variables in the regression, the posterior association of both with the outcome has increased. Also, the posterior means for N and M have both moved away from zero
+
+
+```{r}
+pairs(~K + M + N, dcc)
+```
+
+
+## Categorical variables
+
+### Binary categories
+```{r}
+library(rethinking)
+data("Howell1")
+d <- Howell1
+
+```
+
+Using the sex as a predictor for height, we have this model definition:
+
+$h_i \sim Normal(\mu_i, \sigma)$
+
+$\mu_i = \alpha + \beta_m m_i$
+
+$\alpha \sim Normal(178, 20)$
+
+$\beta_m \sim Normal(0, 10)$
+
+$\sigma \sim Uniform(0,50)$
+
+Where $m_i$ is an indicator variable that takes the value 1 if the case is male, and zero otherwise.
+
+This implies that the prior would have more uncertainty for male cases. See how thhe prior for male is wider:
+```{r}
+mu_female <- rnorm(1e4, 178, 20)
+mu_male <- rnorm(1e4, 178, 20) + rnorm(1e4, 0, 10)
+precis(data.frame(mu_female, mu_male), hist=FALSE)
+```
+This property for prior is not accepted in complex regression models.
+
+Another way to encode categorical vars is using index variable, which is scalable to non-binary categories:
+
+$h_i \sim Normal(\mu_i, \sigma)$
+
+$\mu_i = \alpha_{SEX[i]}$
+
+$\alpha_j \sim Normal(178, 20) \space for \space j=1..2$
+
+
+$\sigma \sim Uniform(0,50)$
+
+
+Now, look how the same prior is assigned to each category. However, we need to construct the index variable as follows:
+```{r}
+# 2 if male
+# 1 if female
+d$sex <- ifelse(d$male==1,2,1)
+
+m5.8 <- quap(
+  alist(
+    height ~ dnorm(mu, sigma),
+    mu <- a[sex],
+    a[sex] ~ dnorm(178,20),
+    sigma ~ dunif(0,50)
+  ),
+  data=d
+)
+
+# depth=2 is needed to show any vector parameters
+precis(m5.8, depth = 2)
+```
+
+We can find the expected difference between females and males as follows:
+```{r}
+post <- extract.samples(m5.8)
+post$diff_fm <- post$a[,1] - post$a[,2]
+precis(post,depth = 2)
+```
+
+This  calculation  is called a contrast.
+
+
+### Many categories
+```{r}
+data(milk)
+
+d <- milk
+
+levels(d$clade)
+
+```
+
+```{r}
+d$clade_id <- as.integer(d$clade)
+```
+
+
+```{r}
+d$K <- standardize(d$kcal.per.g)
+m5.9 <- quap(
+  alist(
+    K ~ dnorm(mu, sigma),
+    mu <- a[clade_id],
+    a[clade_id] ~ dnorm(0,0.5),
+    sigma ~ dexp(1)
+  ),
+  data=d
+)
+
+labels <- paste("a[", 1:4, "]:",levels(d$clade), sep="")
+
+plot(precis(m5.9, depth=2, pars = "a"), labels=labels, xlab="expected kcal (std)")
+```
+
+
+## Exercises
+
+### Hard
+
+1.In the divorce example, suppose the DAG is: M → A → D. What are the implied conditional independencies of the graph? Are the data consistent with it?
+```{r}
+library(rethinking)
+library(daggity)
+
+dag <- dagitty('dag{M -> A -> D}')
+
+impliedConditionalIndependencies(dag)
+
+```
+
+This is the same implied conditional independency that the data is consistent with as discussed in the chapter.
+
+
+2. Assuming that the DAG for the divorce example is indeed M → A → D, fit a new model and use it to estimate the counterfactual effect of halving a State’s marriage rate M. Use the counterfactual example from the chapter (starting on page 140) as a template
+
+Fit the new model
+```{r}
+data("WaffleDivorce")
+
+d <- list()
+d$A <- standardize(WaffleDivorce$MedianAgeMarriage)
+d$D <- standardize(WaffleDivorce$Divorce)
+d$M <- standardize(WaffleDivorce$Marriage)
+
+# M -> A -> D
+mH2 <- quap(
+  alist(
+    # A -> D
+    D ~ dnorm(mu, sigma),
+    mu <- a + bA * A,
+    a ~ dnorm(0,0.2),
+    bA ~ dnorm(0, 0.5),
+    sigma ~ dexp(1),
+    
+    # M -> A
+    A ~ dnorm(mu_A, sigma_A),
+    mu_A <- a_A + bM * M,
+    a_A ~ dnorm(0,0.2),
+    bM ~ dnorm(0, 0.5),
+    sigma_A ~ dexp(1)
+    
+  ),
+  data = d
+)
+
+```
+
+Simulate the counterfactual effect of having a State's marriage rate M
+```{r}
+M_seq <- standardize(WaffleDivorce$Marriage * 0.5)
+M_seq <- M_seq[order(M_seq)]
+
+sim_dat <- data.frame(M=M_seq)
+
+s <- sim(mH2, data=sim_dat, vars=c("A","D"))
+
+```
+
+```{r}
+
+{
+  plot(sim_dat$M, colMeans(s$D), ylim=c(-2,2), type="l",
+       xlab="manipulated M", ylab="counterfactual D")
+  shade(apply(s$D,2,PI), sim_dat$M)
+  mtext("Total counterfactual effect of M on D")
+}
+
+```
+
+
