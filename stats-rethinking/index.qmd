@@ -1,0 +1,4 @@
+---
+title: Statistical Rethinking, 2nd Edition (by Richard McElreath)
+---
+
