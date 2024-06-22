@@ -7,5 +7,14 @@
   },
   "intro-to-econometric-with-r/index.qmd": {
     "index.html": "187a220b"
+  },
+  "intro-to-econometric-with-r/14-intro-to-time-series.qmd": {
+    "14-intro-to-time-series.html": "d5893fdf"
+  },
+  "stats-rethinking/1.qmd": {
+    "1.html": "380f3369"
+  },
+  "stats-rethinking/index.qmd": {
+    "index.html": "64625aee"
   }
 }
